@@ -1,0 +1,302 @@
+---
+title: "Process Mining - Analyzing the Volvo IT Incident Process"
+author: "Monika Baisch, Martina Paul, Klaus Puchner, Alexander Zeiss"
+date: "Updated on March 26th, 2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+library(tidyverse)
+library(bupaR) # Core package for process mining
+library(xesreadR) # Package for loading XES files
+library(processmapR) # Package for displaying traces
+library(gridExtra) # Package for printing plots side by sides
+library(edeaR) # Package for displaying resource frequency
+```
+
+The Volvo Service Desk Dataset used in this project was first released for the BPI Challenge 2013:
+
+Ward Steeman (2013): BPI Challenge 2013, incidents. 4TU.ResearchData. Dataset. https://doi.org/10.4121/uuid:500573e6-accc-4b0c-9576-aa5468b10cee
+
+# Business Processes Analytics aka Process Mining
+
+A lot of event data is recorded by different systems. In order to be able to "mine" (extract, preprocess and analyze) these processes, certain data, so called event data or event logs are needed. These must consist of three certain components: 
+
+- WHY (Process instances/Cases) - Why does the process happen (e.g. patient in hospital needs treatment)?
+- WHAT (Activities) - Steps in the process (e.g. X-RAY scan during the treatment)
+- WHO (Resources) - Who is responsible for a certain event (e.g. Doctor X or Nurse Y)
+
+The process analysis workflow consists of three iterative steps:
+
+- Extraction - transform raw data into event data
+- Processing - enrich and filter event data
+- Analysis - gain useful insights in the process
+
+## Event Data Extraction
+Event data is extracted from one or more information systems and transfored to event logs.
+
+## Preprocessing the Data
+Preprocessing is done by aggregation (removing redundant details), filtering (focusing on the analysis) and enrichment (add useful data attributes, e.g. calculated values). 
+
+## Event Data Analysis
+The data is analyized from three perspectives.
+r
+- The **organizational** perspective - focus on the actors of the process (e.g. roles of different doctors and nurses, how do they work together)
+- The **control-flow** perspective - focus on the flow and structuredness of the process (e.g. a patients journey through the emergency department)
+- The **performance** perspective - focus on the time and efficiency (e.g. how long does it take until a patient can leave the emergency department)
+
+Different perspectives can also be combined with multivariate analysis (e.g. are there links between actors and performance issues) as well as with the inclusion of additional data attributes (e.g. custom activities, costs).
+
+#### Log Data Overview
+First we load the XES log file to get started:
+
+```{r loadlog, warning=FALSE}
+data <- read_xes("bpi_challenge_2013_incidents.xes")
+```
+
+Next we want to get an overview about the available information within the event log:
+
+- How many **events** are recorded (the total number of activities to solve the incident)?
+- How many **cases** does the log contain (incident tickets)?
+- How many **traces** are represented in the log (process instances)?
+- How many distinct **activities** are performed (the different actions performed during a ticket lifecycle)?
+- What is the **average trace length**?
+- What is the **time period** in which the data is recorded (when did all of that happen)?
+
+```{r overvieweventdata}
+data %>% summary()
+data %>% select(lifecycle_id) %>% group_by(lifecycle_id) %>% summarize()
+```
+
+<span style="color:red">**The EDA shows that:**</span>
+
+- our data containts **7554 incident tickets** (process instances)
+- there are **1511 traces** (unique process instances) that show a high variability of activity chains
+- our system has only information about **4 different main ticket states** (activities)
+- the four activities have **13 sub-statuses** (lifecycle id's)
+- from an activity chain perspective, an incident ticket has **about 9 activities average length**
+
+Since the terminology in bupaR is not the same as it is in the IEEE standard for XES files (bupaR orientates on current literature rather than the standard's terminology), we also take a look at the meta-information if the XES file was mapped correctly to bupaR's terminology. As we can see, the mapping is done correctly:
+
+```{r overvieweventmetadata}
+data %>% mapping()
+```
+
+
+### Activity Analysis from Log
+Sinces activities describe the flow of the process/ticket, we take a further look on:
+
+- the actions performed
+
+```{r exploreactivities}
+# Overall activity count
+data %>% activities()
+```
+
+- the order activities are performed (activity sequences aka **traces**)
+
+```{r exploretraces}
+data %>% traces()
+data %>% trace_explorer(coverage = 0.6)
+```
+
+<span style="color:red">**The EDA shows that:**</span>
+
+- we have just four activities in our log, which will make the analysis on a more detailed level much harder
+- the activity sequences (the traces) are not that much expressive in the sense of process interpretability
+- even though the shown sequences represent 60% of all cases, there are still much more activity sequences (traces)
+- it might perhaps be necessary to combine the activities with their sub-statuses to gain more insight
+
+### Event Data Analysis: Organizational Perspective
+Processes always depend on resources or actors getting things done. Even in very structured and standardized processes habits and decisions of staff members have impact on the efficiency and effectiveness of the process. Therefore we investigate:
+
+- Who executes the work and is therefore involved?
+
+```{r resourcelabelanalysis}
+resources(data)
+```
+
+```{r resourceanalysis}
+
+# User Organization: the business area of the user reporting the problem to the helpdesk
+data %>% group_by(`organization involved`) %>% summarize(counts=n())
+
+# Function division: The IT organization is divided into functions (mostly technology wise) 
+data %>% group_by(org_role) %>% summarize(counts=n())
+
+# ST (support team): the actual team that will try to solve the problem
+data %>% group_by(org_group) %>% summarize(counts=n())
+
+# Ticket owner (responsible for ticket during its lifecycle), works in a support team
+data %>% group_by(resource_id) %>% summarize(counts=n())
+
+# Products serviced
+data %>% group_by(product) %>% summarize(counts=n())
+
+# Incident impact classes
+data %>% group_by(impact) %>% summarize(counts=n()) 
+
+# Country of Ticket Owner
+data %>% group_by(`resource country`) %>% summarize(counts=n())
+
+# Country of support team and/or function division
+data %>% group_by(`organization country`) %>% summarize(counts=n())
+
+```
+
+- Who is specialized in a certain task?
+- Who transfers work to whom?
+
+```{r resourceactivityanalysis}
+# level options: "log", "case", "trace", "activity", "resource", "resource-activity"
+data %>% resource_frequency(level = "resource-activity") %>% plot()
+data %>% resource_frequency(level = "resource") %>% plot()
+data %>% resource_frequency(level = "activity") %>% plot()
+
+#"case", "resource", "resource-activity"
+data %>% resource_involvement(level = "resource") %>% plot()
+
+
+```
+
+<span style="color:red">**The EDA shows that:**</span>
+
+- persons with only one activity are rather specialized
+- when an activity is only performed by a limited set of ressources, brain drain might occur
+- the level of activities is too abstract for a conclusive analysis
+
+```{r handoverworkanalysis}
+#data %>% resource_map("resource")
+```
+
+### Event Data Analysis: Control Flow Perspective
+The control flow refers to the different successions of activities, each case can be seen as a sequence of activities.Each unique sequence is called a trace of process variance. The process can be analyzed in different by:
+
+**Metrics (for specific aspects of the process)**
+- Start and end activities (Entry & Exit points)
+
+```{r entryexitpointsanalysis}
+data %>% start_activities("activity") %>% plot()
+data %>% end_activities("activity") %>% plot()
+```
+
+
+- Distribution of case length
+- Which activities are always present in the cases (and exceptional ones)
+- Rework (repetitions and self-loops)
+
+```{r reworkanalysis}
+# Activity presence shows in what percentage of cases an activity is present
+data %>% activity_presence()
+data %>% activity_presence() %>% plot()
+
+# level options: "log", each "case", each "activity", "resource", "resource-activity"
+# Min, max and average number of repetitions
+data %>% number_of_repetitions(level = "log") 
+# Number of repetitions per resource
+data %>% number_of_repetitions(level = "resource") %>% plot()
+# Number of repetitions per activity
+data %>% number_of_repetitions(level = "activity") %>% plot()
+
+
+```
+
+**Visuals**
+
+- **Process map**
+
+```{r processmapanalysis}
+# A normal process map
+data %>% process_map(type = frequency())
+```
+
+- **Trace explorer**
+```{r traceanalysis}
+# Shows the most frequent traces covering e.g. 60% of the event log
+data %>% trace_explorer(type = "frequent", coverage = 0.6)
+# Shows the most infrequent traces covering e.g. 10% of the event log
+data %>% trace_explorer(type = "infrequent", coverage = 0.1)
+
+```
+
+- **Pecedence matrix** (flows from one activity to another)
+
+```{r precedenceanalysis}
+# Options: "absolute" or "relative" frequency, 
+# "relative_antecedent" frequency, e.g. A is x% of time followed by B.
+# "relative_consequent" frequency, e.g. C is x% of time preceded by D.
+data %>% precedence_matrix(type = "absolute") %>% plot()
+```
+
+### Event Data Analysis: Performance Perspective
+We will now concentrate on the time perspective (in general). The process can be analyzed in different by:
+
+**Visuals**
+
+- **Performance process map**
+
+```{r performanceprocessmapanalysis}
+# A performance process map (shows durations)
+data %>% process_map(type = performance())
+# FUN = "median","min","max","mean"  units = "hours", "days"
+data %>% process_map(type = performance(FUN = median, units = "hours"))
+```
+
+
+- **Dotted chart**
+
+```{r dottedchartanalysis}
+# The dotted chart shows distributions of activities over time (x-axis: time, y_axis: cases)
+data %>% dotted_chart(x = "absolute", sort = "start", units = "hours")
+```
+
+**Metrics (for specific aspects of the process)**
+
+- **Throughput time**
+
+```{r throughputtimeanalysis}
+# throughput_time (includes active time + idle time) 
+data %>% throughput_time(level = "log", units = "hours") %>% plot()
+```
+
+- **Processing time**
+
+```{r processingtimeanalysis}
+# processing_time (sum of the activity durations, excludes time between activities)
+data %>% processing_time(level = "activity") %>% plot()
+```
+
+
+- **Idle time**
+
+```{r idletimeanalysis}
+# idle_time (sum of the durations between activities)
+data %>% idle_time("log", units = "days") %>% plot()
+
+```
+
+## Linking Perspectives
+The first way to linking perspektives is by making use of the granularity levels of the metrics:
+<process_metric>(level = "log", "trace", "case", "activity", "resource", "resource-activity")
+
+e.g. By calculating the processing time at the level of resources, we can linke the organizational and performance perspective: *processing_time(level = "resource")*
+
+By analyzing rework by resources, we can link the control-flow and organizational view: *number_of_repetitions(level = "resource")*
+
+Alternatively, we might also want to include additional data attributes in the analysis. This can be done by grouping the event log. Incorporating categorical data attributes into the calculation of a process metric can be done using the group_by function, similarly as when working with regular dta in the tidyverse. Grouping on a variable will implicitly split up the event log according to different values of that variable. Any process metric which gests calculated for a grouped event log will be calculated for each group individually. The results for eacht of the group will then be combined in one single outpout, which can also be visualized using the plot function.
+
+This workflow allows us to easily compare different groups of cases. Combining all these ingredients (data attributes, metrics, levels, plots) allows for a very flexible toolset to perform process analysis. Using the piping symbol, each of the different tools can be easily combined, e.g.:
+
+```{r test}
+data %>% group_by(impact) %>% number_of_repetitions(level = "resource") %>% plot()
+data %>% number_of_repetitions(level = "activity") %>% arrange(activity_id)
+```
+
+Because of this flexiblity, we can now answer almost every process-related research question you can think of. 
